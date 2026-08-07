@@ -1,0 +1,193 @@
+# =============================================================================
+# ALLERT System Configuration v2.0
+# Single source of truth for paths, hyperparameters, and thresholds.
+# All modules should prefer values from this file over hardcoded defaults.
+# =============================================================================
+project:
+  name: "ALLERT"
+  version: "2.0.0"
+  random_seed: 42
+
+paths:
+  data_raw: "data/raw/air_quality_data_5m.csv"
+  data_processed: "data/processed/features_5min_scaled.csv"
+  model_dir: "model"
+  results_dir: "results"
+  visualizations_dir: "results/visualizations"
+  tables_dir: "results/tables"
+
+sampling:
+  raw_interval_seconds: 10
+  transmission_interval_minutes: 5
+  records_per_day: 288        # 24 * 60 / 5
+
+preprocessing:
+  gap_fill_threshold_hours: 2
+  rolling_median_window: 3    # 5-min readings
+  outlier_zscore_threshold: 5.0
+  outlier_zscore_window_hours: 24
+  availability_target_pct: 95
+  validate_pm10_geq_pm25: true
+  range_limits:
+    pm2_5: [0, 1000]
+    pm10: [0, 1000]
+    temperature: [-10, 60]
+    humidity: [0, 100]
+
+features:
+  target_variables:
+    - pm2_5
+    - pm10
+  raw_inputs:
+    - pm2_5
+    - pm10
+    - temperature
+    - humidity
+  lag_hours: [0.25, 0.5, 1, 3, 6, 12, 24, 48, 72]
+  rolling_windows_hours: [1, 3, 6, 12, 24, 48, 168]   # 168 = 7 days
+  velocity_hours: [0.25, 0.5, 1, 3, 6, 12]
+  acceleration_hours: [1, 3, 6, 12]
+  ratio_lag_hours: [0, 1, 6, 24]
+  ema_windows_hours: [1, 6, 24]
+  cyclical_features:
+    - hour
+    - dayofweek
+    - month
+  cumulative_exposure_hours: 72
+  scaler_type: "minmax"       # or "standard"; fit on training only
+  scale_targets: false        # if true, targets are scaled and evaluation inverts them
+  # Spike-aware features
+  add_spike_lag_features: true
+  add_spike_rate_features: true
+  add_roc_threshold_features: true
+  spike_thresholds_pm25: [25, 35, 50]
+  spike_thresholds_pm10: [50, 75, 100]
+  spike_lag_hours: [1, 3, 6, 24]
+  spike_rate_windows_hours: [6, 24, 72]
+  roc_thresholds_ugm3_per_hour: [5, 10, 15]
+  roc_hours: [0.5, 1, 3]
+
+reproducibility:
+  random_seed: 42
+  deterministic_mode: false   # PyTorch deterministic algorithms (slower but reproducible)
+
+model:
+  sequence_length: 2016       # 7 days * 24 hours * 12 steps/hour
+  n_lstm_layers: 2            # 2, 3, or 4
+  lstm_units_layer1: 96
+  lstm_units_layer2: 128
+  lstm_units_layer3: 128     # used when n_lstm_layers >= 3
+  lstm_units_layer4: 128     # used when n_lstm_layers >= 4
+  dropout_rate: 0.3057
+  recurrent_dropout: 0.1777
+  l2_lambda: 3.25e-6
+  learning_rate: 0.00124
+  batch_size: 16
+  max_epochs: 300
+  gradient_clip_norm: 1.0
+  use_attention: true
+  attention_units: 64
+  attention_type: "vector"   # "vector" = learned temporal attention, "none" = global average
+  use_spike_head: true
+  spike_threshold: 35.0       # PM2.5 µg/m³ threshold for high-PM spike detection
+  spike_head_weight: 0.3
+  mixed_precision: true           # use torch.cuda.amp on CUDA; fallback to fp32 on CPU
+  forecast_horizons_hours: [6, 12, 24]
+  loss_weights: [0.5, 0.3, 0.2]
+  optimizer: "adam"
+  scheduler: "cosine"         # "plateau", "cosine", "onecycle"
+  scheduler_max_epochs: 300
+  loss_type: "weighted_mae"   # "mae" or "weighted_mae"
+  loss_alpha: 2.5             # spike penalty multiplier when loss_type=weighted_mae
+
+anomaly:
+  z_thresholds: [2.0, 3.0, 4.0]            # fallback global thresholds
+  z_thresholds_pm2_5: [2.0, 3.0, 4.0]
+  z_thresholds_pm10: [2.0, 3.0, 4.0]
+  velocity_threshold_ugm3_per_hour: 15.0    # fallback global threshold
+  velocity_threshold_pm2_5: 15.0
+  velocity_threshold_pm10: 15.0
+  pm25_event_threshold_ugm3: 15.0           # WHO 24-hour guideline
+  pm10_event_threshold_ugm3: 45.0           # WHO 24-hour guideline for PM10
+  cusum_k_multiplier: 0.5     # k = multiplier * sigma_residual
+  cusum_h_multiplier: 4.0     # h = multiplier * sigma_residual
+  residual_rolling_window_hours: 24
+  calibration:
+    enabled: false
+    k_multipliers: [0.25, 0.5, 0.75, 1.0]
+    h_multipliers: [2.0, 3.0, 4.0, 5.0, 6.0]
+    max_fpr_pct: 10.0
+
+risk:
+  pm2_5_beta: 0.0104
+  pm10_beta: 0.0026
+  temp_baseline_c: 25.0
+  temp_beta: 0.012
+  humidity_baseline_pct: 60.0
+  humidity_beta: -0.004
+  baseline_prevalence_adult: 0.20
+  baseline_prevalence_pediatric: 0.22
+  distributed_lag_weights: [0.60, 0.25, 0.10, 0.05]
+  distributed_lag_hours: [0, 24, 48, 72]
+  adult_tiers: {low: 0.0, moderate: 0.15, high: 0.25, very_high: 0.40}
+  pediatric_tiers: {low: 0.0, moderate: 0.13, high: 0.23, very_high: 0.38}
+  sensitivity_perturbation_pct: 0.10
+
+hpo:
+  enabled: true
+  n_trials: 12
+  timeout_seconds: 21600          # 6 hours per HPO session; Optuna stops cleanly and resumes via SQLite
+  cv_folds: 5
+  direction: minimize
+  sampler: tpe                    # tpe, random, cmaes
+  pruner: median                  # median, halving, hyperband
+  storage: "sqlite:///results/optuna.db"   # enables resume across sessions
+  study_name: allert_hpo_subset
+  search_space:
+    learning_rate: [5.0e-4, 1.0e-2]
+    n_lstm_layers: [2, 3]
+    lstm_units_layer1: [64, 96, 128, 192]
+    lstm_units_layer2: [64, 96, 128, 192]
+    dropout_rate: [0.1, 0.5]
+    recurrent_dropout_rate: [0.0, 0.3]
+    batch_size: [16, 32]
+    l2_lambda: [1.0e-6, 1.0e-3]
+  max_epochs_per_trial: 15
+  early_stopping_patience: 6
+  lr_reduction_patience: 3
+  subset_fraction: 0.30          # use 30% of sequences for fast HPO while preserving split ratios
+  seed: 42
+
+training:
+  train_split: 0.70
+  val_split: 0.15
+  test_split: 0.15
+  early_stopping_patience: 30
+  early_stopping_monitor: "val_loss"
+  restore_best_weights: true
+  lr_reduction_factor: 0.5
+  lr_reduction_patience: 5
+  min_lr: 1.0e-7
+  data_augmentation:
+    enabled: false
+    jitter_std: 0.01
+    window_slice_prob: 0.1
+    mixup_alpha: 0.0
+  walk_forward_cv:
+    enabled: false
+    n_splits: 5
+    test_size_days: 7
+  curriculum:
+    enabled: false
+    initial_horizon_hours: 6
+    final_horizon_hours: 24
+    switch_epoch: 10
+  progress_log:
+    enabled: true
+    path: "model/training_progress.json"
+  checkpoint:
+    enabled: true
+    checkpoint_dir: "model/checkpoints"
+    checkpoint_frequency_epochs: 1
+    keep_last_n: 3
+    resume_if_checkpoint_exists: true
